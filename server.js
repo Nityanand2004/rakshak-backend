@@ -3,23 +3,35 @@ const admin = require('firebase-admin');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
-const path = require('path'); // Added this
+const path = require('path');
 
-// --- NEW FIREBASE INITIALIZATION START ---
-const serviceAccountPath = path.resolve(__dirname, 'serviceAccountKey.json');
-console.log("Attempting to load Firebase Key from:", serviceAccountPath);
+// --- SMART FIREBASE INITIALIZATION ---
+let serviceAccount;
 
 try {
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccountPath)
-    });
-    console.log("Firebase Admin SDK initialized successfully.");
+    if (process.env.FIREBASE_KEY) {
+        // Option A: Use Environment Variable (Best for Cloud)
+        serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
+        console.log("Firebase Key loaded from Environment Variable.");
+    } else {
+        // Option B: Use Local File (Fallback)
+        const serviceAccountPath = path.resolve(__dirname, 'serviceAccountKey.json');
+        serviceAccount = require(serviceAccountPath);
+        console.log("Firebase Key loaded from local file:", serviceAccountPath);
+    }
+
+    if (!admin.apps.length) {
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+        console.log("Firebase Admin SDK initialized successfully.");
+    }
 } catch (error) {
-    console.error("Firebase initialization failed:", error.message);
+    console.error("CRITICAL: Firebase initialization failed!", error.message);
 }
 
 const db = admin.firestore();
-// --- NEW FIREBASE INITIALIZATION END ---
+// --- END INITIALIZATION ---
 
 const app = express();
 const server = http.createServer(app);
@@ -28,7 +40,10 @@ const io = new Server(server, { cors: { origin: "*" } });
 app.use(cors());
 app.use(express.json());
 
-// API 1: Data Ingest (For ESP32 / Raspberry Pi)
+// Root Route (To check if server is awake)
+app.get('/', (req, res) => res.send("RAKSHAK Backend is Live and Ready!"));
+
+// API 1: Data Ingest
 app.post('/api/ingest', async (req, res) => {
     try {
         const data = {
@@ -50,7 +65,7 @@ app.post('/api/ingest', async (req, res) => {
     }
 });
 
-// API 2: History (For Dashboard Logs)
+// API 2: History
 app.get('/api/history', async (req, res) => {
     try {
         const snap = await db.collection('sensor_readings').orderBy('timestamp', 'desc').limit(20).get();
@@ -58,5 +73,5 @@ app.get('/api/history', async (req, res) => {
     } catch (e) { res.status(500).send(e.message); }
 });
 
-const PORT = process.env.PORT || 10000; // Render uses 10000 by default
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => console.log(`RAKSHAK System Live on ${PORT}`));
