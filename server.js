@@ -10,11 +10,11 @@ let serviceAccount;
 
 try {
     if (process.env.FIREBASE_KEY) {
-        // Option A: Use Environment Variable (Best for Cloud)
+        // Option A: Use Environment Variable (Best for Render Cloud)
         serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
         console.log("Firebase Key loaded from Environment Variable.");
     } else {
-        // Option B: Use Local File (Fallback)
+        // Option B: Use Local File (Fallback for Localhost)
         const serviceAccountPath = path.resolve(__dirname, 'serviceAccountKey.json');
         serviceAccount = require(serviceAccountPath);
         console.log("Firebase Key loaded from local file:", serviceAccountPath);
@@ -48,8 +48,10 @@ app.post('/api/ingest', async (req, res) => {
     try {
         const data = {
             ...req.body,
-            timestamp: admin.firestore.FieldValue.serverTimestamp()
+            // Optimization: Use a string timestamp so the frontend doesn't crash
+            timestamp: new Date().toISOString() 
         };
+        
         const docRef = await db.collection('sensor_readings').add(data);
         
         io.emit('live_data', data);
@@ -65,12 +67,31 @@ app.post('/api/ingest', async (req, res) => {
     }
 });
 
-// API 2: History
+// API 2: History (OPTIMIZED)
 app.get('/api/history', async (req, res) => {
     try {
-        const snap = await db.collection('sensor_readings').orderBy('timestamp', 'desc').limit(20).get();
-        res.send(snap.docs.map(doc => doc.data()));
-    } catch (e) { res.status(500).send(e.message); }
+        // QUOTA SAVER: Limit to 20 documents only
+        const snap = await db.collection('sensor_readings')
+            .orderBy('timestamp', 'desc')
+            .limit(20)
+            .get();
+
+        if (snap.empty) {
+            return res.status(200).json([]);
+        }
+
+        const logs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        res.status(200).json(logs);
+
+    } catch (e) { 
+        console.error("History Error:", e.message);
+        
+        // Catch Quota Error gracefully
+        if (e.message.includes('8 RESOURCE_EXHAUSTED')) {
+            return res.status(429).json({ error: "QUOTA_EXCEEDED", message: "Firebase limit reached." });
+        }
+        res.status(500).send(e.message); 
+    }
 });
 
 const PORT = process.env.PORT || 10000;
