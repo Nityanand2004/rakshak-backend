@@ -43,17 +43,17 @@ app.use(express.json());
 // Root Route (To check if server is awake)
 app.get('/', (req, res) => res.send("RAKSHAK Backend is Live and Ready!"));
 
+// --- MODULE 1: WEARABLE UNIT (Personal Health) ---
+
 // API 1: Data Ingest
 app.post('/api/ingest', async (req, res) => {
     try {
         const data = {
             ...req.body,
-            // Optimization: Use a string timestamp so the frontend doesn't crash
             timestamp: new Date().toISOString() 
         };
         
         const docRef = await db.collection('sensor_readings').add(data);
-        
         io.emit('live_data', data);
 
         if (data.alert_level >= 2) {
@@ -70,27 +70,69 @@ app.post('/api/ingest', async (req, res) => {
 // API 2: History (OPTIMIZED)
 app.get('/api/history', async (req, res) => {
     try {
-        // QUOTA SAVER: Limit to 20 documents only
         const snap = await db.collection('sensor_readings')
             .orderBy('timestamp', 'desc')
             .limit(20)
             .get();
 
-        if (snap.empty) {
-            return res.status(200).json([]);
-        }
+        if (snap.empty) return res.status(200).json([]);
 
         const logs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         res.status(200).json(logs);
 
     } catch (e) { 
         console.error("History Error:", e.message);
-        
-        // Catch Quota Error gracefully
         if (e.message.includes('8 RESOURCE_EXHAUSTED')) {
             return res.status(429).json({ error: "QUOTA_EXCEEDED", message: "Firebase limit reached." });
         }
         res.status(500).send(e.message); 
+    }
+});
+
+
+// --- MODULE 2: PORTABLE ENVIRONMENTAL UNIT (Hazardous Gases) ---
+
+// API 3: Environmental Data Ingest (NEW)
+app.post('/api/environmental/ingest', async (req, res) => {
+    try {
+        const { device_id, ch4, h2s, co } = req.body;
+
+        const envReading = {
+            device_id: device_id || "PORTABLE_UNIT",
+            ch4: ch4 || 0,
+            h2s: h2s || 0,
+            co: co || 0,
+            timestamp: new Date().toISOString()
+        };
+
+        const docRef = await db.collection('env_readings').add(envReading);
+        
+        // Emit via Socket so Anmol can see it live on the dashboard
+        io.emit('env_live_data', envReading);
+
+        res.status(201).json({ success: true, id: docRef.id });
+    } catch (e) {
+        console.error("Env Ingest Error:", e.message);
+        res.status(500).send(e.message);
+    }
+});
+
+// API 4: Environmental History (NEW)
+app.get('/api/environmental/history', async (req, res) => {
+    try {
+        const snap = await db.collection('env_readings')
+            .orderBy('timestamp', 'desc')
+            .limit(10)
+            .get();
+
+        if (snap.empty) return res.status(200).json([]);
+
+        const logs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        res.status(200).json(logs);
+
+    } catch (e) {
+        console.error("Env History Error:", e.message);
+        res.status(500).send(e.message);
     }
 });
 
